@@ -87,6 +87,26 @@ You should at least have a block size of 100k and at least a number of blocks th
 
 Another side effect of this is, that it is likely to speed up your other code, since writes to the compressor only blocks if the compressor is already compressing the number of blocks you have specified. This also means you don't have worry about buffering input to the compressor.
 
+### Bounded concurrency with LimitedWriter
+
+For batch archival workloads where bursts of tasks must not each grab GOMAXPROCS workers, `NewLimitedWriter` provides per-call adaptive limits. It caps the number of blocks compressed concurrently, the number of queued blocks and the total pending (accepted but not yet written) bytes; when any limit is reached the calling `Write` blocks, applying backpressure instead of queuing unbounded work.
+
+```
+var b bytes.Buffer
+w, err := gzip.NewLimitedWriter(&b, gzip.DefaultCompression, gzip.Limits{
+	BlockSize:         1 << 20,
+	MaxInflightBlocks: 2,
+	MaxQueuedBlocks:   1,
+	MaxPendingBytes:   4 << 20,
+})
+if err != nil { ... }
+w.Write(data)   // blocks when any limit is reached
+w.Flush()       // waits for accepted data only; stream stays open
+w.Close()
+```
+
+`WriteContext` accepts a context for cancelling a blocked call, `Cancel` aborts the current stream (nothing more is written to it), and `Reset` drains or cancels the previous generation before the writer is reused on a new output. `Stats` returns a snapshot of submitted/started/written/canceled blocks and pending bytes. Blocks are always written to the output in strict sequence order, and a downstream write error stops compression and is returned verbatim. The classic `Writer` is unaffected.
+
 ## Decompression
 
 Decompression works similar to compression. That means that you simply call pgzip the same way as you would call [compress/gzip](http://golang.org/pkg/compress/gzip). 
